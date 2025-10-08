@@ -1,4 +1,5 @@
-streamlit
-pandas
-numpy
-scikit-learn
+fastapi==0.115.0
+uvicorn==0.30.1
+pydantic==2.9.1
+pandas==2.2.2
+numpy==1.26.4

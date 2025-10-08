@@ -1,6 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List
+from jose import jwt, JWTError, ExpiredSignatureError
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import numpy as np
 import pickle
@@ -8,6 +11,33 @@ import ast
 
 app = FastAPI(title="Medical Recommendation API", version="1.0")
 
+# ================= JWT SETTINGS =================
+JWT_SECRET = "AutoGenSecretKey_ChangeThis123!"  # 🔐 Change this to a strong random secret
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRY_HOURS = 24
+
+# Will hold the token generated at startup
+AUTO_JWT_TOKEN = None
+
+def create_jwt_token():
+    payload = {
+        "sub": "auto_generated_user",
+        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS)
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def decode_jwt_token(token: str):
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+security = HTTPBearer()
+
+# ================= DATA & MODEL =================
 class SymptomsRequest(BaseModel):
     symptoms: List[str]
 
@@ -29,6 +59,7 @@ le.fit(training_data['prognosis'])
 
 all_symptoms = list(svc.feature_names_in_)
 
+# ================= HELPERS =================
 def normalize_symptom(symptom: str) -> str:
     return symptom.strip().lower().replace(" ", "_")
 
@@ -70,14 +101,36 @@ def get_disease_details(disease: str):
             []
         )
 
+# ================= ROUTES =================
+
+@app.on_event("startup")
+async def startup_event():
+    global AUTO_JWT_TOKEN
+    AUTO_JWT_TOKEN = create_jwt_token()
+    print("✅ Auto-generated JWT Token at startup:")
+    print(AUTO_JWT_TOKEN)
+
 @app.get("/")
 async def root():
-    return {"message": "Medical Recommendation API is running 🚀"}
+    return {
+        "message": "Medical Recommendation API is running 🚀",
+        "token": AUTO_JWT_TOKEN
+    }
+
+@app.get("/token")
+async def get_token():
+    return {"access_token": AUTO_JWT_TOKEN, "token_type": "bearer"}
 
 @app.post("/predict")
-async def predict_disease(request: SymptomsRequest):
-    symptoms = request.symptoms
+async def predict_disease(
+    request: SymptomsRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    # ✅ Verify JWT
+    token = credentials.credentials
+    decode_jwt_token(token)
 
+    symptoms = request.symptoms
     symptom_vector = create_symptom_vector(symptoms, all_symptoms)
     symptom_df = pd.DataFrame(symptom_vector, columns=all_symptoms)
 
